@@ -54,16 +54,17 @@ With ThetaEvolve, an 8B model can outperform AlphaEvolve on open optimization pr
 Our RL environment follows the same setup as [slime](https://github.com/THUDM/slime) and [OpenEvolve](https://github.com/codelion/openevolve). We use Docker (run in ThetaEvolve folder):
 
 ```bash
-# fixed image, haven't checked on the latest image
-docker pull slimerl/slime:v0.5.0rc0-cu126
+# Pull latest slime image
+docker pull slimerl/slime:latest
 
 # Start the container
 docker run --rm --name slime-evolve \
   --gpus all --ipc=host --shm-size=16g \
   --ulimit memlock=-1 --ulimit stack=67108864 \
+  --ulimit nofile=1048576:1048576 \
   -v "$PWD":/workspace -w /workspace \
-  -v /path/to/disk:/path/to/disk \
-  -it slimerl/slime:v0.5.0rc0-cu126 /bin/bash
+  -v /path/to/disk:/data \
+  -it slimerl/slime:latest /bin/bash
 ```
 
 After entering the docker, run the installation commands:
@@ -127,6 +128,28 @@ Then you can directly run
 ```bash
 bash run.sh
 ```
+
+### Recommended logging for future reference
+Use a fixed data root and keep per-run metadata + logs:
+
+```bash
+export SAVE_PATH=/data/thetaevolve
+mkdir -p "${SAVE_PATH}"/{runs,logs}
+
+RUN_TS=$(date +%Y%m%d_%H%M%S)
+RUN_LOG_DIR="${SAVE_PATH}/runs/${RUN_TS}"
+mkdir -p "${RUN_LOG_DIR}"
+
+# Save reproducibility info
+git rev-parse HEAD > "${RUN_LOG_DIR}/git_commit.txt"
+cp run.sh "${RUN_LOG_DIR}/run.sh.snapshot"
+cp scripts_evolve/Nemotron-Research-Reasoning-Qwen-1.5B/general.sh "${RUN_LOG_DIR}/general.sh.snapshot"
+
+# Launch and tee logs
+bash run.sh 2>&1 | tee "${RUN_LOG_DIR}/train.log"
+```
+
+This preserves the exact run script/config used for each experiment.
 
 You could also adjust more parameters in `scripts_evolve/Nemotron-Research-Reasoning-Qwen-1.5B/general.sh`. Like ckpt saving frequency (default 10), number of evaluation threads (default 16), gpus (default 8), etc.
 
