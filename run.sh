@@ -46,7 +46,7 @@ NOTE=""
 #### Replace with your own wandb settings ####
 WANDB_API_KEY=REDACTED_WANDB_KEY
 WANDB_ENTITY=jif005-ucsd
-WANDB_PROJECT=theta_evolve_inference
+WANDB_PROJECT=theta_evolve_training
 
 # ########################## END CONFIGURATION SECTION #############################
 
