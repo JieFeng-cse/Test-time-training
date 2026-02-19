@@ -1,4 +1,5 @@
 import logging
+import os
 import socket
 
 import ray
@@ -11,7 +12,7 @@ from .rollout import RolloutManager
 logger = logging.getLogger(__name__)
 
 
-@ray.remote(num_gpus=1)
+@ray.remote(num_gpus=1, num_cpus=0)
 class InfoActor:
     def get_ip_and_gpu_id(self):
         return ray.util.get_node_ip_address(), ray.get_gpu_ids()[0]
@@ -40,11 +41,38 @@ def sort_key(x):
 
 def _create_placement_group(num_gpus):
     """Create a placement group with the specified number of GPUs."""
-    bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_gpus)]
+    cpu_per_bundle = float(os.environ.get("SLIME_PG_CPU_PER_BUNDLE", "0.5"))
+    bundles = [{"GPU": 1, "CPU": cpu_per_bundle} for _ in range(num_gpus)]
     pg = placement_group(bundles, strategy="PACK")
     num_bundles = len(bundles)
-
-    ray.get(pg.ready())
+    logger.info(
+        "Requesting placement group bundles: count=%s, per_bundle={GPU:1, CPU:%s}, available=%s",
+        num_bundles,
+        cpu_per_bundle,
+        ray.available_resources(),
+    )
+    timeout_s = int(os.environ.get("SLIME_PG_WAIT_TIMEOUT_S", "300"))
+    poll_s = int(os.environ.get("SLIME_PG_WAIT_POLL_S", "10"))
+    wait_s = 0
+    ready_ref = pg.ready()
+    while True:
+        done, _ = ray.wait([ready_ref], timeout=poll_s)
+        if done:
+            break
+        wait_s += poll_s
+        logger.warning(
+            "Placement group still pending after %ss (need %s GPU bundles). available=%s cluster=%s",
+            wait_s,
+            num_gpus,
+            ray.available_resources(),
+            ray.cluster_resources(),
+        )
+        if wait_s >= timeout_s:
+            raise TimeoutError(
+                "Timed out waiting for placement group readiness after "
+                f"{timeout_s}s. Need {num_gpus} GPU bundles. "
+                f"available={ray.available_resources()} cluster={ray.cluster_resources()}"
+            )
     # use info actor to get the GPU id
     info_actors = []
     for i in range(num_bundles):
@@ -105,6 +133,7 @@ def create_placement_groups(args):
 
     logger.info(f"Creating placement group with {num_gpus} GPUs...")
     pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids = _create_placement_group(num_gpus)
+    logger.info(f"Created placement group with {num_gpus} GPUs...")
 
     rollout_pg_reordered_bundle_indices = actor_pg_reordered_bundle_indices[rollout_offset:]
     rollout_pg_reordered_gpu_ids = actor_pg_reordered_gpu_ids[rollout_offset:]
@@ -167,6 +196,14 @@ def create_training_models(args, pgs, rollout_manager):
     actor_model.set_rollout_manager(rollout_manager)
     if args.rollout_global_dataset:
         ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
+    elif getattr(args, "evolving_gym", False):
+        detected_rollout_id = ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
+        # Continue from latest detected database checkpoint for inference-only resume.
+        if detected_rollout_id is not None and getattr(args, "debug_rollout_only", False):
+            args.start_rollout_id = detected_rollout_id + 1
+            logger.info(f"[DEBUG-ROLLOUT-ONLY] Resuming from rollout_id={args.start_rollout_id}")
+    else:
+        raise AssertionError("None of args.rollout_global_dataset or args.evolving_gym is set.")
 
     return actor_model, critic_model
 
@@ -182,7 +219,7 @@ def create_rollout_manager(args, pg):
     if args.num_rollout is None:
         num_rollout_per_epoch = ray.get(rollout_manager.get_num_rollout_per_epoch.remote())
         args.num_rollout = num_rollout_per_epoch * args.num_epoch
-        assert args.num_rollout > 0
+    assert args.num_rollout > 0
 
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="snapshot"))
