@@ -1,8 +1,11 @@
 import abc
 import copy
+import glob
 import logging
 import os
 from pathlib import Path
+import re
+from typing import Optional
 
 import torch
 
@@ -12,6 +15,89 @@ from slime.utils.processing_utils import load_processor, load_tokenizer
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
+
+
+def _find_latest_database_checkpoint(load_dir: str) -> Optional[int]:
+    rollout_dir = os.path.join(load_dir, "rollout")
+    if not os.path.exists(rollout_dir):
+        return None
+
+    db_files = glob.glob(os.path.join(rollout_dir, "evolving_gym_database_*"))
+    if not db_files:
+        return None
+
+    rollout_ids = []
+    for db_file in db_files:
+        match = re.search(r"evolving_gym_database_(\d+)", os.path.basename(db_file))
+        if match:
+            rollout_ids.append(int(match.group(1)))
+    return max(rollout_ids) if rollout_ids else None
+
+
+class EvolvingGymManager:
+    def __init__(self, args, tokenizer):
+        self.args = args
+        self.tokenizer = tokenizer
+
+        assert args.evolving_gym_initial_program and args.evolving_gym_evaluator_file, (
+            "EvolvingGym needs --evolving-gym-initial-program and --evolving-gym-evaluator-file"
+        )
+
+        from openevolve.evolving_gym import SingleTaskEvolvingGym
+        from slime.rollout.rm_hub.evolving_gym_rm import set_gym as set_evolving_gym_to_rm
+
+        self.gym = SingleTaskEvolvingGym(
+            initial_program_path=args.evolving_gym_initial_program,
+            evaluation_file=args.evolving_gym_evaluator_file,
+            config_path=getattr(args, "evolving_gym_config_path", None),
+            config=None,
+            max_concurrent_evaluations=getattr(args, "evolving_gym_max_concurrent_evals", 8),
+            log_prompts=getattr(args, "evolving_gym_log_prompts", True),
+            lazy_output_penalty_level=getattr(args, "evolving_gym_lazy_output_penalty_level", 2),
+            database_reinit_ratio=getattr(args, "evolving_gym_database_reinit_ratio", 0.0),
+            smallest_restart_step=getattr(args, "evolving_gym_smallest_restart_step", 0),
+            largest_restart_step=getattr(args, "evolving_gym_largest_restart_step", None),
+            add_historical_programs=getattr(args, "evolving_gym_add_historical_programs", 0),
+            reward_process_type=args.evolving_gym_reward_process_type,
+            seed=args.evolving_gym_seed,
+        )
+
+        if getattr(self.args, "evolving_gym_record", False):
+            self.gym.enable_recording(getattr(self.args, "evolving_gym_record_dir", "gym_records"))
+
+        # Make gym accessible to RM in this process.
+        set_evolving_gym_to_rm(self.gym)
+
+    def _ensure_initialized(self):
+        if not getattr(self.gym, "_initialized", False):
+            self.gym.initialize_sync()
+
+    def get_sample(self) -> Sample:
+        self._ensure_initialized()
+        prompt_dict, parent_program = self.gym.problem_generator()
+        system_txt = prompt_dict.get("system") or ""
+        user_txt = prompt_dict.get("user") or ""
+
+        if not self.args.apply_chat_template:
+            raise RuntimeError("EvolvingGym requires --apply-chat-template in current integration.")
+
+        messages = []
+        if system_txt:
+            messages.append({"role": "system", "content": system_txt})
+        if not user_txt:
+            raise RuntimeError("EvolvingGym prompt user message is empty.")
+        messages.append({"role": "user", "content": user_txt})
+        prompt_str = self.tokenizer.apply_chat_template(messages, None, tokenize=False, add_generation_prompt=True)
+
+        return Sample(
+            prompt=prompt_str,
+            label=None,
+            metadata={
+                "parent_program": parent_program,
+                "evolving_gym": True,
+                "rm_type": "evolving-gym",
+            },
+        )
 
 
 class DataSource(abc.ABC):
@@ -57,6 +143,7 @@ class RolloutDataSource(DataSource):
         self.sample_offset = 0
         # TODO remove this
         self.metadata = {}
+        self.evolving_gym_manager = None
 
         if args.rollout_global_dataset:
             tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
@@ -84,6 +171,10 @@ class RolloutDataSource(DataSource):
             )
             if self.args.rollout_shuffle:
                 self.dataset.shuffle(self.epoch_id)
+        elif getattr(args, "evolving_gym", False):
+            self.dataset = None
+            tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+            self.evolving_gym_manager = EvolvingGymManager(args, tokenizer)
         else:
             self.dataset = None
 
@@ -101,6 +192,10 @@ class RolloutDataSource(DataSource):
                     self.dataset.shuffle(self.epoch_id)
                 prompt_samples += self.dataset.samples[:num_samples]
                 self.sample_offset = num_samples
+        elif self.evolving_gym_manager is not None:
+            prompt_samples = []
+            while len(prompt_samples) < num_samples:
+                prompt_samples.append(self.evolving_gym_manager.get_sample())
         else:
             prompt_samples = [Sample() for _ in range(num_samples)]
 
@@ -121,7 +216,11 @@ class RolloutDataSource(DataSource):
         raise RuntimeError(f"Cannot add samples to {self.__class__.__name__}. This is a read-only data source.")
 
     def save(self, rollout_id):
-        if not self.args.rollout_global_dataset:
+        if getattr(self.args, "evolving_gym", False):
+            database_path = os.path.join(self.args.save, f"rollout/evolving_gym_database_{rollout_id}")
+            os.makedirs(os.path.dirname(database_path), exist_ok=True)
+            self.evolving_gym_manager.gym.database.save(database_path, rollout_id)
+        elif not self.args.rollout_global_dataset:
             return
 
         state_dict = {
@@ -136,16 +235,37 @@ class RolloutDataSource(DataSource):
         torch.save(state_dict, path)
 
     def load(self, rollout_id=None):
-        if not self.args.rollout_global_dataset:
-            return
-
         if self.args.load is None:
-            return
+            if getattr(self.args, "evolving_gym", False) and self.evolving_gym_manager is not None:
+                self.evolving_gym_manager._ensure_initialized()
+            return None
+
+        detected_rollout_id = None
+        if rollout_id == -1 and getattr(self.args, "evolving_gym", False):
+            detected_rollout_id = _find_latest_database_checkpoint(self.args.load)
+            if detected_rollout_id is None:
+                logger.info("No evolving-gym database checkpoint found, initializing database.")
+                self.evolving_gym_manager._ensure_initialized()
+                return None
+            rollout_id = detected_rollout_id
+
+        if getattr(self.args, "evolving_gym", False):
+            database_path = os.path.join(self.args.load, f"rollout/evolving_gym_database_{rollout_id}")
+            if os.path.exists(database_path):
+                self.evolving_gym_manager.gym.database.load(database_path)
+                self.evolving_gym_manager.gym._initialized = True
+            else:
+                logger.info(f"Evolving gym database {database_path} does not exist, initializing database.")
+                self.evolving_gym_manager._ensure_initialized()
+                return detected_rollout_id
+
+        if not self.args.rollout_global_dataset:
+            return detected_rollout_id
 
         path = os.path.join(self.args.load, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
         if not os.path.exists(path):
             logger.info(f"Checkpoint {path} does not exist.")
-            return
+            return detected_rollout_id
 
         logger.info(f"load metadata from {path}")
         logger.info(f"load metadata: {self.metadata}")
@@ -159,8 +279,10 @@ class RolloutDataSource(DataSource):
         if self.args.rollout_global_dataset and self.args.rollout_shuffle:
             self.dataset.shuffle(self.epoch_id)
 
+        return detected_rollout_id
+
     def __len__(self) -> int:
-        return len(self.dataset)
+        return len(self.dataset) if self.dataset is not None else 0
 
 
 class RolloutDataSourceWithBuffer(RolloutDataSource):

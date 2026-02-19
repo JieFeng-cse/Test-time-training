@@ -4,7 +4,7 @@
 ########################### CONFIGURATION SECTION - EDIT THESE VARIABLES #############################
 
 #### Important: replace SAVE_PATH with your path with enough space ####
-export SAVE_PATH=/path/to/disk
+export SAVE_PATH=/data2/jie/Test-time-training/data
 
 #### Model selection ####
 SMALL_MODEL_NAME="dpsk_prorl_v2_1.5b"
@@ -44,9 +44,9 @@ INITIAL_PROGRAM_POSTFIX=""
 NOTE=""
 
 #### Replace with your own wandb settings ####
-WANDB_API_KEY=aaa
-WANDB_ENTITY=bbb
-WANDB_PROJECT=ccc
+WANDB_API_KEY=REDACTED_WANDB_KEY
+WANDB_ENTITY=jif005-ucsd
+WANDB_PROJECT=theta_evolve_inference
 
 # ########################## END CONFIGURATION SECTION #############################
 

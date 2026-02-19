@@ -195,5 +195,8 @@ _examples_synced/
 
 *gym_records*
 train_log.txt
-
+run.sh #ignore my api key
 *@anthropic-ai*
+
+# Local large model directory
+Nemotron-Research-Reasoning-Qwen-1.5B/

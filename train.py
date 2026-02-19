@@ -57,7 +57,7 @@ def train(args):
                 rollout_id,
                 force_sync=rollout_id == args.num_rollout - 1,
             )
-        if args.rollout_global_dataset:
+        if args.rollout_global_dataset or getattr(args, "evolving_gym", False):
             ray.get(rollout_manager.save.remote(rollout_id))
 
     # train loop.
