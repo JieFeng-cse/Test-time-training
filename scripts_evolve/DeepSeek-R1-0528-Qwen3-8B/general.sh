@@ -111,7 +111,7 @@ ROLLOUT_ARGS=(
   --rm-type evolving-gym
   --reward-key reward
 
-  --num-rollout 1000000
+  --num-rollout 300
   --rollout-batch-size 32
   --n-samples-per-prompt 16
   --rollout-max-response-len 16384
@@ -128,7 +128,7 @@ ROLLOUT_ARGS=(
 
 
 PERF_ARGS=(
-  --tensor-model-parallel-size 4
+  --tensor-model-parallel-size 2
   --sequence-parallel
   --pipeline-model-parallel-size 1
   --context-parallel-size 2
@@ -175,9 +175,10 @@ WANDB_ARGS=(
 )
 
 SGLANG_ARGS=(
-  --rollout-num-gpus-per-engine 8
-  --sglang-mem-fraction-static 0.5
-   --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256) # increase throughput
+  --rollout-num-gpus-per-engine 2
+  --sglang-mem-fraction-static 0.7
+  --sglang-server-concurrency 64
+  --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256) # increase throughput
 )
 
 MISC_ARGS=(
@@ -216,7 +217,7 @@ export CUDA_DEVICE_MAX_CONNECTIONS="1"
 export NCCL_NVLS_ENABLE="${HAS_NVLINK}"
 export DATASETS_CACHE="${HF_DATASETS_CACHE}"
 export WANDB_GROUP="${RUN_NAME}"
-export SLIME_PG_CPU_PER_BUNDLE="${SLIME_PG_CPU_PER_BUNDLE:-0.5}"
+export SLIME_PG_CPU_PER_BUNDLE="${SLIME_PG_CPU_PER_BUNDLE:-1.0}"
 
 python3 train.py \
   --actor-num-nodes 1 \

@@ -200,3 +200,5 @@ run.sh #ignore my api key
 
 # Local large model directory
 Nemotron-Research-Reasoning-Qwen-1.5B/
+DeepSeek-R1-0528-Qwen3-8B/
+data/
