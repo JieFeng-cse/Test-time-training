@@ -4,7 +4,7 @@
 ########################### CONFIGURATION SECTION - EDIT THESE VARIABLES #############################
 
 #### Important: replace SAVE_PATH with your path with enough space ####
-export SAVE_PATH=/data2/jie/Test-time-training/data
+export SAVE_PATH=/workspace/Test-time-training/data
 
 #### Model selection ####
 # SMALL_MODEL_NAME="dpsk_prorl_v2_1.5b"

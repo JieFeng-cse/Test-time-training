@@ -217,11 +217,7 @@ export CUDA_DEVICE_MAX_CONNECTIONS="1"
 export NCCL_NVLS_ENABLE="${HAS_NVLINK}"
 export DATASETS_CACHE="${HF_DATASETS_CACHE}"
 export WANDB_GROUP="${RUN_NAME}"
-<<<<<<< HEAD
-export SLIME_PG_CPU_PER_BUNDLE="${SLIME_PG_CPU_PER_BUNDLE:-0.5}"
-=======
 export SLIME_PG_CPU_PER_BUNDLE="${SLIME_PG_CPU_PER_BUNDLE:-1.0}"
->>>>>>> backup-before-clean
 
 python3 train.py \
   --actor-num-nodes 1 \
