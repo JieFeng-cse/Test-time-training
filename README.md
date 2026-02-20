@@ -54,7 +54,7 @@ With ThetaEvolve, an 8B model can outperform AlphaEvolve on open optimization pr
 Our RL environment follows the same setup as [slime](https://github.com/THUDM/slime) and [OpenEvolve](https://github.com/codelion/openevolve). We use Docker (run in ThetaEvolve folder):
 
 ```bash
-# Pull latest slime image
+# Pull latest slime image Feb 19, 2026
 docker pull slimerl/slime:latest
 
 # Start the container
