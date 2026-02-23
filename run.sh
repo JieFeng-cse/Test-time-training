@@ -7,8 +7,8 @@
 export SAVE_PATH=/data2/jie/Test-time-training/data
 
 #### Model selection ####
-SMALL_MODEL_NAME="dpsk_prorl_v2_1.5b"
-# SMALL_MODEL_NAME="dpsk_distill_qwen3_8b"
+# SMALL_MODEL_NAME="dpsk_prorl_v2_1.5b"
+SMALL_MODEL_NAME="dpsk_distill_qwen3_8b"
 
 #### Task configuration ####
 # TASK="hadamard_matrix"

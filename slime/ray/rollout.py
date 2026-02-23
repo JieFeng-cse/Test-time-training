@@ -37,6 +37,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+_ROLLOUT_BEST_REWARD_SO_FAR = float("-inf")
 
 
 @ray.remote
@@ -54,9 +55,9 @@ class RolloutManager:
         init_http_client(args)
 
         data_source_cls = load_function(self.args.data_source_path)
-        self.data_source = data_source_cls(args)
+        self.data_source = data_source_cls(args) # slime.rollout.data_source.RolloutDataSourceWithBuffer
 
-        self.generate_rollout = load_function(self.args.rollout_function_path)
+        self.generate_rollout = load_function(self.args.rollout_function_path) # defualt path: slime.rollout.sglang_rollout.generate_rollout
         self.eval_generate_rollout = load_function(self.args.eval_function_path)
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:
@@ -731,9 +732,18 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
 
 def compute_metrics_from_samples(args, samples):
     response_lengths = [sample.effective_response_length for sample in samples]
+    rewards = [sample.get_reward_value(args) for sample in samples]
 
     log_dict = {}
     log_dict |= dict_add_prefix(compute_statistics(response_lengths), "response_len/")
+    if rewards:
+        log_dict["reward"] = float(np.mean(rewards))
+        log_dict["reward_max"] = float(np.max(rewards))
+
+        global _ROLLOUT_BEST_REWARD_SO_FAR
+        _ROLLOUT_BEST_REWARD_SO_FAR = max(_ROLLOUT_BEST_REWARD_SO_FAR, log_dict["reward_max"])
+        log_dict["reward_best_so_far"] = _ROLLOUT_BEST_REWARD_SO_FAR
+
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_reward_cat_metrics(args, samples)
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
